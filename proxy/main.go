@@ -98,15 +98,8 @@ func (p *Proxy) fastHttpProxyHandler(ctx *fasthttp.RequestCtx) {
 		return
 	}
 
-	b, err := json.Marshal(bestBidResponse)
-	if err != nil {
-		log.Println("marshal best bid response err: ", err)
-		ctx.SetStatusCode(fasthttp.StatusInternalServerError)
-		return
-	}
-
 	ctx.SetContentType("application/json; charset=utf-8")
-	ctx.SetBody(b)
+	ctx.SetBody(bestBidResponse)
 	ctx.SetStatusCode(fasthttp.StatusOK)
 }
 
@@ -137,19 +130,12 @@ func (p *Proxy) proxyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	b, err := json.Marshal(bestBidResponse)
-	if err != nil {
-		log.Println("marshal best bid response err: ", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	_, _ = fmt.Fprint(w, string(b))
+	_, _ = fmt.Fprint(w, string(bestBidResponse))
 }
 
-func (p *Proxy) sendToRecipients(commonRequest test_task.CommonProxyRequest) (*test_task.InnerResponse, error) {
+func (p *Proxy) sendToRecipients(commonRequest test_task.CommonProxyRequest) ([]byte, error) {
 	var (
 		wg sync.WaitGroup
 	)
@@ -160,15 +146,14 @@ func (p *Proxy) sendToRecipients(commonRequest test_task.CommonProxyRequest) (*t
 		return nil, err
 	}
 
-	innerReq := commonToInnerRequest(commonRequest)
-
-	innerReqBytes, err := json.Marshal(innerReq)
+	innerReqBytes, err := json.Marshal(commonToInnerRequest(commonRequest))
 	if err != nil {
 		log.Println("unable to marshal inner request", err)
 		return nil, err
 	}
 
 	recipientResponses := make([]test_task.InnerResponse, 0)
+	var mu sync.Mutex
 
 	wg.Add(len(p.recipients))
 	for _, recipient := range p.recipients {
@@ -181,7 +166,7 @@ func (p *Proxy) sendToRecipients(commonRequest test_task.CommonProxyRequest) (*t
 			req.SetBodyRaw(innerReqBytes)
 
 			resp := fasthttp.AcquireResponse()
-			err := p.httpClient.DoTimeout(req, resp, reqTimeout)
+			err = p.httpClient.DoTimeout(req, resp, reqTimeout)
 			fasthttp.ReleaseRequest(req)
 			defer fasthttp.ReleaseResponse(resp)
 			if err != nil {
@@ -190,16 +175,16 @@ func (p *Proxy) sendToRecipients(commonRequest test_task.CommonProxyRequest) (*t
 				return
 			}
 
-			respBody := resp.Body()
-
 			var innerResp test_task.InnerResponse
-			err = json.Unmarshal(respBody, &innerResp)
+			err = json.Unmarshal(resp.Body(), &innerResp)
 			if err != nil {
-				log.Println("unable to unmarshal inner response, err:", err, "body", string(respBody))
+				log.Println("unable to unmarshal inner response, err:", err, "body", string(resp.Body()))
 				return
 			}
 
+			mu.Lock()
 			recipientResponses = append(recipientResponses, innerResp)
+			mu.Unlock()
 		}(recipient)
 	}
 	wg.Wait()
@@ -234,5 +219,5 @@ func (p *Proxy) sendToRecipients(commonRequest test_task.CommonProxyRequest) (*t
 	log.Printf("req: %s; inner: %s;\nrecip: %s\nmax: %s\n", string(commonReqBytes), string(innerReqBytes),
 		string(recipientResponsesBytes), string(maxBidResponse))
 
-	return &recipientResponses[maxIndex], nil
+	return maxBidResponse, nil
 }
