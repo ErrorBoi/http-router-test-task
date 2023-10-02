@@ -1,2 +1,9 @@
+# logs and binaries
 /bin/*
 /log/*
+
+# IDE
+.idea
+
+# profiles
+profile*.png
