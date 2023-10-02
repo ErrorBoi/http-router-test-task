@@ -33,13 +33,18 @@ func main() {
 		wg   sync.WaitGroup
 		addr = "http://localhost:" + strconv.Itoa(*proxy) + test_task.ProxyEndpoint
 	)
+	netClient := &http.Client{
+		Transport: &http.Transport{
+			MaxConnsPerHost: 50,
+		},
+	}
 	log.Println("Start client session on", addr, "limit", *limit)
 	for i := 0; i < *limit; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			req := test_task.GenerateRandomRequest(rand.Intn(3))
-			resp, err := http.Post(addr, "application/json", bytes.NewBuffer(req))
+			resp, err := netClient.Post(addr, "application/json", bytes.NewBuffer(req))
 			if err != nil {
 				log.Println("req:", string(req), "err", err)
 				return

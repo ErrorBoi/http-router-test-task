@@ -9,6 +9,7 @@ import (
 	"kadam.net/test_task"
 	"log"
 	"net/http"
+	_ "net/http/pprof"
 	"strconv"
 	"sync"
 	"time"
@@ -39,6 +40,11 @@ func init() {
 }
 
 func main() {
+	// Server for pprof
+	go func() {
+		fmt.Println(http.ListenAndServe("localhost:6060", nil))
+	}()
+
 	log.Println("Initializing proxy...")
 	proxy := Proxy{}
 
@@ -77,7 +83,13 @@ func (p *Proxy) init(rawRecipients string, params proxyInitParams) {
 func (p *Proxy) start() {
 	// Not using router because there's just one endpoint for a server.
 	// but router usage (such as gorilla/mux or fasthttp-routing) is a good practice.
-	log.Fatal(fasthttp.ListenAndServe(":"+strconv.Itoa(*port), p.fastHttpProxyHandler))
+	server := &fasthttp.Server{
+		Handler:       p.fastHttpProxyHandler,
+		MaxConnsPerIP: 100,
+		Concurrency:   100,
+	}
+
+	log.Fatal(server.ListenAndServe(":" + strconv.Itoa(*port)))
 }
 
 func (p *Proxy) fastHttpProxyHandler(ctx *fasthttp.RequestCtx) {
@@ -91,7 +103,7 @@ func (p *Proxy) fastHttpProxyHandler(ctx *fasthttp.RequestCtx) {
 		return
 	}
 
-	bestBidResponse, err := p.sendToRecipients(commonRequest)
+	bestBidResponse, err := p.getBestBid(commonRequest)
 	if err != nil {
 		log.Println("send to recipients err: ", err)
 		ctx.SetStatusCode(fasthttp.StatusInternalServerError)
@@ -123,7 +135,7 @@ func (p *Proxy) proxyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bestBidResponse, err := p.sendToRecipients(commonRequest)
+	bestBidResponse, err := p.getBestBid(commonRequest)
 	if err != nil {
 		log.Println("send to recipients err: ", err)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -135,11 +147,7 @@ func (p *Proxy) proxyHandler(w http.ResponseWriter, r *http.Request) {
 	_, _ = fmt.Fprint(w, string(bestBidResponse))
 }
 
-func (p *Proxy) sendToRecipients(commonRequest test_task.CommonProxyRequest) ([]byte, error) {
-	var (
-		wg sync.WaitGroup
-	)
-
+func (p *Proxy) getBestBid(commonRequest test_task.CommonProxyRequest) ([]byte, error) {
 	commonReqBytes, err := json.Marshal(commonRequest)
 	if err != nil {
 		log.Println("unable to marshal common request", err)
@@ -152,42 +160,7 @@ func (p *Proxy) sendToRecipients(commonRequest test_task.CommonProxyRequest) ([]
 		return nil, err
 	}
 
-	recipientResponses := make([]test_task.InnerResponse, 0)
-	var mu sync.Mutex
-
-	wg.Add(len(p.recipients))
-	for _, recipient := range p.recipients {
-		go func(recipient string) {
-			defer wg.Done()
-			req := fasthttp.AcquireRequest()
-			req.SetRequestURI(recipient)
-			req.Header.SetMethod(fasthttp.MethodPost)
-			req.Header.SetContentTypeBytes(headerContentTypeJson)
-			req.SetBodyRaw(innerReqBytes)
-
-			resp := fasthttp.AcquireResponse()
-			err = p.httpClient.DoTimeout(req, resp, reqTimeout)
-			fasthttp.ReleaseRequest(req)
-			defer fasthttp.ReleaseResponse(resp)
-			if err != nil {
-				log.Println("req:", string(innerReqBytes), "err", err)
-
-				return
-			}
-
-			var innerResp test_task.InnerResponse
-			err = json.Unmarshal(resp.Body(), &innerResp)
-			if err != nil {
-				log.Println("unable to unmarshal inner response, err:", err, "body", string(resp.Body()))
-				return
-			}
-
-			mu.Lock()
-			recipientResponses = append(recipientResponses, innerResp)
-			mu.Unlock()
-		}(recipient)
-	}
-	wg.Wait()
+	recipientResponses := p.sendToRecipients(innerReqBytes)
 
 	var (
 		maxIndex int
@@ -220,4 +193,47 @@ func (p *Proxy) sendToRecipients(commonRequest test_task.CommonProxyRequest) ([]
 		string(recipientResponsesBytes), string(maxBidResponse))
 
 	return maxBidResponse, nil
+}
+
+func (p *Proxy) sendToRecipients(innerReqBytes []byte) []test_task.InnerResponse {
+	recipientResponses := make([]test_task.InnerResponse, 0)
+	var (
+		mu sync.Mutex
+		wg sync.WaitGroup
+	)
+
+	wg.Add(len(p.recipients))
+	for _, recipient := range p.recipients {
+		go func(recipient string) {
+			defer wg.Done()
+			req := fasthttp.AcquireRequest()
+			req.SetRequestURI(recipient)
+			req.Header.SetMethod(fasthttp.MethodPost)
+			req.Header.SetContentTypeBytes(headerContentTypeJson)
+			req.SetBodyRaw(innerReqBytes)
+
+			resp := fasthttp.AcquireResponse()
+			err := p.httpClient.DoTimeout(req, resp, reqTimeout)
+			fasthttp.ReleaseRequest(req)
+			defer fasthttp.ReleaseResponse(resp)
+			if err != nil {
+				log.Println("req:", string(innerReqBytes), "err", err)
+				return
+			}
+
+			var innerResp test_task.InnerResponse
+			err = json.Unmarshal(resp.Body(), &innerResp)
+			if err != nil {
+				log.Println("unable to unmarshal inner response, err:", err, "body", string(resp.Body()))
+				return
+			}
+
+			mu.Lock()
+			recipientResponses = append(recipientResponses, innerResp)
+			mu.Unlock()
+		}(recipient)
+	}
+	wg.Wait()
+
+	return recipientResponses
 }
