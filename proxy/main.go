@@ -168,21 +168,21 @@ func (p *Proxy) getBestBid(commonRequest test_task.CommonProxyRequest) ([]byte, 
 
 		maxBidResponse []byte
 	)
-	for i, recipientResponse := range recipientResponses {
-		if i == 0 || recipientResponse.Bid > maxValue {
+	for i, response := range recipientResponses.buf {
+		if i == 0 || response.Bid > maxValue {
 			maxIndex = i
-			maxValue = recipientResponse.Bid
+			maxValue = response.Bid
 		}
 	}
 
-	recipientResponsesBytes, err := json.Marshal(recipientResponses)
+	recipientResponsesBytes, err := json.Marshal(recipientResponses.buf)
 	if err != nil {
 		log.Println("unable to marshal recipient responses", err)
 		return nil, err
 	}
 
-	if len(recipientResponses) != 0 {
-		maxBidResponse, err = json.Marshal(recipientResponses[maxIndex])
+	if recipientResponses.len() != 0 {
+		maxBidResponse, err = json.Marshal(recipientResponses.get(maxIndex))
 		if err != nil {
 			log.Println("unable to marshal max bid response", err)
 			return nil, err
@@ -195,14 +195,14 @@ func (p *Proxy) getBestBid(commonRequest test_task.CommonProxyRequest) ([]byte, 
 	return maxBidResponse, nil
 }
 
-func (p *Proxy) sendToRecipients(innerReqBytes []byte) []test_task.InnerResponse {
-	recipientResponses := make([]test_task.InnerResponse, 0)
+func (p *Proxy) sendToRecipients(innerReqBytes []byte) lfa[test_task.InnerResponse] {
+	var recipientResponses lfa[test_task.InnerResponse]
 	var (
-		mu sync.Mutex
 		wg sync.WaitGroup
 	)
 
 	wg.Add(len(p.recipients))
+	recipientResponses.reserve(len(p.recipients))
 	for _, recipient := range p.recipients {
 		go func(recipient string) {
 			defer wg.Done()
@@ -228,9 +228,7 @@ func (p *Proxy) sendToRecipients(innerReqBytes []byte) []test_task.InnerResponse
 				return
 			}
 
-			mu.Lock()
-			recipientResponses = append(recipientResponses, innerResp)
-			mu.Unlock()
+			recipientResponses.add(innerResp)
 		}(recipient)
 	}
 	wg.Wait()
