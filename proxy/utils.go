@@ -38,7 +38,7 @@ func commonToInnerRequest(common test_task.CommonProxyRequest) test_task.InnerRe
 	var minPrice float64
 	switch true {
 	case common.Balance != nil:
-		minPrice = *common.Balance
+		minPrice = float64(*common.Balance)
 	case common.Price != nil:
 		minPrice = float64(*common.Price)
 	case common.Bid != nil:

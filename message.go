@@ -3,6 +3,7 @@ package test_task
 import (
 	"encoding/json"
 	"math/rand"
+	"strconv"
 )
 
 type ActionType int
@@ -42,6 +43,13 @@ type RequestV3 struct {
 	Bid        uint64     `json:"bid,omitempty"`
 }
 
+// RequestV4 represents version 4 of external request.
+type RequestV4 struct {
+	ActionType ActionType `json:"action_type,omitempty"`
+	Id         string     `json:"id,omitempty"`
+	Balance    string     `json:"balance,omitempty"`
+}
+
 // InnerRequest represents request to interchange data between proxy and recipients.
 type InnerRequest struct {
 	ActionType ActionType `json:"action_type,omitempty"`
@@ -62,12 +70,39 @@ type InnerResponse struct {
 type CommonProxyRequest struct {
 	ActionType ActionType `json:"action_type,omitempty"`
 	Id         *string    `json:"id,omitempty"`
-	Balance    *float64   `json:"balance,omitempty"`
+	Balance    *Price     `json:"balance,omitempty"`
 	Key        *int32     `json:"key,omitempty"`
-	Price      *float32   `json:"price,omitempty"`
+	Price      *Price     `json:"price,omitempty"`
 	Note       *string    `json:"note,omitempty"`
 	Name       *string    `json:"name,omitempty"`
-	Bid        *uint64    `json:"bid,omitempty"`
+	Bid        *Price     `json:"bid,omitempty"`
+}
+
+type Price float64
+
+func (p *Price) UnmarshalJSON(data []byte) (err error) {
+	if string(data) == "null" || string(data) == `""` {
+		return nil
+	}
+
+	var priceRaw interface{}
+	if err = json.Unmarshal(data, &priceRaw); err != nil {
+		return err
+	}
+
+	var priceParsed float64
+	switch priceRaw.(type) {
+	case string:
+		priceParsed, err = strconv.ParseFloat(priceRaw.(string), 64)
+		if err != nil {
+			return err
+		}
+	case float64:
+		priceParsed = priceRaw.(float64)
+	}
+
+	*p = Price(priceParsed)
+	return nil
 }
 
 func GenerateRandomRequest(typ int) []byte {
@@ -94,6 +129,14 @@ func GenerateRandomRequest(typ int) []byte {
 			ActionType: getRandomActionType(),
 			Name:       GetRandomStr(30),
 			Bid:        rand.Uint64(),
+		}
+		b, _ := json.Marshal(req)
+		return b
+	case 3:
+		req := RequestV4{
+			ActionType: getRandomActionType(),
+			Id:         GetRandomStr(20),
+			Balance:    strconv.FormatFloat(rand.Float64(), 'f', -1, 64),
 		}
 		b, _ := json.Marshal(req)
 		return b

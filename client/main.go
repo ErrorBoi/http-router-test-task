@@ -43,7 +43,7 @@ func main() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			req := test_task.GenerateRandomRequest(rand.Intn(3))
+			req := test_task.GenerateRandomRequest(rand.Intn(4))
 			resp, err := netClient.Post(addr, "application/json", bytes.NewBuffer(req))
 			if err != nil {
 				log.Println("req:", string(req), "err", err)
